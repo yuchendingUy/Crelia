@@ -28,6 +28,7 @@ Crelia 基于 [Folia](https://github.com/PaperMC/Folia) 开发。
 ### 构建独立 JAR
 
 - folia怎么来他就怎么来
+- 构建出来是一个服务端核心jar
 
 ## 上游项目
 
