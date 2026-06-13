@@ -22,6 +22,9 @@ Crelia 基于 [Folia](https://github.com/PaperMC/Folia) 开发。
 - folia怎么来他就怎么来
 - 构建出来是一个服务端核心jar
 
+##不好意思，这里存储的有一点问题：本仓库目前只包含 NeoForge 模块(neoforge/),尚未包含"把 NeoForge 钩子注入 Minecraft 原版类"的那部分源码补丁——该缝合目前仍在本地源码树中,未固化为补丁文件(它位于被 gitignore 的 folia-server/src/minecraft)。
+因此,直接从本仓库 applyPatches 构建出的不是完整的缝合服务端(NeoForge 框架在、但与原版的钩子未接上)。该缝合将在后续通过 rebuildPatches 固化为 minecraft-patches/ 补丁后补全。
+
 ## 上游项目
 
 - [PaperMC/Folia](https://github.com/PaperMC/Folia)
