@@ -51,3 +51,7 @@ Folia-API
 paper-api-generator
 
 !gradle/wrapper/gradle-wrapper.jar
+
+# Crelia
+/mods/
+/Crelia-*.jar

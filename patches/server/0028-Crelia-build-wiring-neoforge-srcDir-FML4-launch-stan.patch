@@ -1,0 +1,152 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E4=B8=81=E7=A6=B9=E8=BE=B0?=
+ <dingyuchen@dingyuchendeMacBook-Pro.local>
+Date: Sat, 13 Jun 2026 12:04:19 +0800
+Subject: [PATCH] Crelia: build wiring (neoforge srcDir, FML4 launch,
+ standalone packaging)
+
+
+diff --git a/build.gradle.kts b/build.gradle.kts
+index d0fe50778e60bb02b2f9553ce965b6319565607d..674cd2cb11acabb91d408b52687eea23900b63a2 100644
+--- a/build.gradle.kts
++++ b/build.gradle.kts
+@@ -1,5 +1,9 @@
+ import io.papermc.paperweight.util.*
++import java.security.MessageDigest
+ import java.time.Instant
++import java.util.Properties
++import java.util.jar.JarEntry
++import java.util.jar.JarOutputStream
+ import java.util.zip.ZipEntry
+ import java.util.zip.ZipInputStream
+ import java.util.zip.ZipOutputStream
+@@ -538,3 +542,129 @@ tasks.registerRunTask("runServerFml") {
+         "--fml.neoFormVersion", "20240808.144430",
+     )
+ }
++
++// Crelia: 自解压单文件发布包(照搬 26.1.2 的 creliaStandaloneJar 模式,索引改为 boot/cp 两组以适配 FML 4 的模块路径启动)
++val compileCreliaLauncher by tasks.registering(JavaCompile::class) {
++    description = "Compile the tiny self-contained Crelia jar launcher"
++    source(rootProject.fileTree("build-data/crelia-launcher/src/main/java") { include("**/*.java") })
++    classpath = files()
++    destinationDirectory.set(layout.buildDirectory.dir("crelia/launcher-classes"))
++    options.release.set(21)
++}
++
++val creliaStandaloneStagingDir = layout.buildDirectory.dir("crelia/standalone")
++
++val prepareCreliaStandalone = tasks.register("prepareCreliaStandalone") {
++    description = "Stage the exact runServerFml boot/classpath layout as embedded jars"
++    // Crelia: cp 组 = runServerFml 任务实际用的 classpath(唯一真相源)。手工重建 runtimeClasspath 会多出
++    // gradle 变体解析剔除掉的 commons-lang-2.6 / brigadier 等(commons-lang 2.6 的 'enum' 包会让
++    // BootstrapLauncher 模块化时崩),直接复用 runServerFml.classpath 保证逐文件一致。
++    // ⚠️ 用 tasks.named(...).map{...} 作为 inputs 会让 gradle 把 runServerFml 当成前置任务真的跑起来
++    //   (服务器永不退出 → 构建挂死);所以这里只把 classpath 的"组成成分"声明为 inputs,
++    //   真正的 classpath 在 doLast 里用 .get().classpath 读取(读属性不会触发运行)。
++    val runServerFmlTask = tasks.named<JavaExec>("runServerFml")
++    dependsOn(tasks.includeMappings, creliaExtraJar)
++    inputs.files(configurations.runtimeClasspath)
++    inputs.files(fmlLoader)
++    inputs.files(bootLayer)
++    outputs.dir(creliaStandaloneStagingDir)
++
++    doLast {
++        fun sha256(file: File): String {
++            val digest = MessageDigest.getInstance("SHA-256")
++            file.inputStream().use { input ->
++                val buffer = ByteArray(1 shl 16)
++                while (true) {
++                    val read = input.read(buffer)
++                    if (read < 0) break
++                    digest.update(buffer, 0, read)
++                }
++            }
++            return digest.digest().joinToString("") { "%02x".format(it) }
++        }
++
++        val outputDir = creliaStandaloneStagingDir.get().asFile
++        val librariesDir = outputDir.resolve("libraries")
++        project.delete(outputDir)
++        librariesDir.mkdirs()
++
++        val bootFiles = bootLayer.files.toList()
++        val bootPaths = bootFiles.map { it.absoluteFile.normalize().path }.toSet()
++        // Crelia: cp 组 = runServerFml 实际 classpath,顺序原样保留;bootLayer 已在 -p,从 cp 里剔除以防重复
++        val seenPaths = mutableSetOf<String>()
++        val cpFiles = runServerFmlTask.get().classpath.files.filter { file ->
++            val path = file.absoluteFile.normalize().path
++            file.exists() && path !in bootPaths && seenPaths.add(path)
++        }
++
++        fun jarDirectory(sourceDir: File, target: File) { // Crelia: classpath 上的类目录(如 log4jPlugins)打成确定性小 jar 再嵌
++            JarOutputStream(target.outputStream().buffered()).use { out ->
++                sourceDir.walkTopDown().filter { it.isFile }
++                    .sortedBy { it.relativeTo(sourceDir).invariantSeparatorsPath }
++                    .forEach { f ->
++                        val entry = JarEntry(f.relativeTo(sourceDir).invariantSeparatorsPath)
++                        entry.time = 0
++                        out.putNextEntry(entry)
++                        f.inputStream().use { it.copyTo(out) }
++                        out.closeEntry()
++                    }
++            }
++        }
++
++        val usedNames = mutableSetOf<String>()
++        fun stage(file: File): File {
++            var name = if (file.isDirectory) "${file.name}.jar" else file.name
++            var n = 1
++            while (!usedNames.add(name)) { // 文件名冲突时保首个,后续加序号前缀(注意:此名不再匹配 ignoreList,正常不会发生)
++                name = "dup${n++}-$name"
++                logger.warn("Crelia standalone: duplicate library name, staged as {}", name)
++            }
++            val staged = librariesDir.resolve(name)
++            if (file.isDirectory) jarDirectory(file, staged) else file.copyTo(staged, overwrite = true)
++            return staged
++        }
++
++        // Crelia: 记录胖 jar 的最终文件名——启动器要从它里面解压 assets/data 当 vanilla 资源根(不另存一份,免得 99M 再翻倍)
++        val fatJarName = creliaFmlServerJar.get().archiveFile.get().asFile.name
++
++        val indexLines = buildList {
++            for (file in bootFiles) { val staged = stage(file); add("${sha256(staged)}\tboot\t${staged.name}") }
++            for (file in cpFiles) { val staged = stage(file); add("${sha256(staged)}\tcp\t${staged.name}") }
++        }
++        outputDir.resolve("crelia-libraries.index")
++            .writeText(indexLines.joinToString(separator = "\n", postfix = "\n"))
++
++        // Crelia: 启动配置从 runServerFml 任务实时读取,杜绝 ignoreList 等参数在启动器里写死后漂移
++        val rsf = runServerFmlTask.get()
++        val ignoreList = rsf.systemProperties["ignoreList"]?.toString() ?: ""
++        require(librariesDir.resolve(fatJarName).isFile) { "fat jar $fatJarName 未在 cp 组中,vanillaResources 无法定位" }
++        val props = Properties()
++        props.setProperty("ignoreList", ignoreList)
++        props.setProperty("vanillaResourcesFrom", fatJarName)
++        props.setProperty("vanillaResourcesDir", "vanilla-resources")
++        outputDir.resolve("crelia-launch.properties").outputStream().use {
++            props.store(it, "Crelia standalone launch config (auto-synced from runServerFml)")
++        }
++    }
++}
++
++tasks.register<Jar>("creliaStandaloneJar") {
++    group = "build"
++    description = "Build the self-extracting standalone Crelia server jar"
++    dependsOn(compileCreliaLauncher, prepareCreliaStandalone)
++    archiveFileName.set("Crelia-1.21.1.jar")
++    destinationDirectory.set(rootProject.layout.projectDirectory.dir(".."))
++    from(compileCreliaLauncher.flatMap { it.destinationDirectory })
++    from(creliaStandaloneStagingDir.map { it.dir("libraries") }) {
++        into("META-INF/crelia-libraries")
++    }
++    from(creliaStandaloneStagingDir.map { it.file("crelia-libraries.index") }) {
++        into("META-INF")
++    }
++    from(creliaStandaloneStagingDir.map { it.file("crelia-launch.properties") }) {
++        into("META-INF")
++    }
++    manifest {
++        attributes("Main-Class" to "crelia.launcher.Main")
++    }
++}

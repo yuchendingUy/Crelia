@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E4=B8=81=E7=A6=B9=E8=BE=B0?=
+ <dingyuchen@dingyuchendeMacBook-Pro.local>
+Date: Sat, 13 Jun 2026 02:26:03 +0800
+Subject: [PATCH] stitch missing handlePong/handleCustomPayload overrides in
+ configuration listener (fix join stall)
+
+
+diff --git a/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
+index 892b23714c0749a82a3ff588ad9fa0bdd64844f8..d68e7d38638b1eeadcb93fb46130b3d41722402a 100644
+--- a/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
++++ b/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
+@@ -131,6 +131,34 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+         this.server.getServerResourcePack().ifPresent((minecraftserver_serverresourcepackinfo) -> {
+             this.configurationTasks.add(new ServerResourcePackConfigurationTask(minecraftserver_serverresourcepackinfo));
+         });
++        // Neo: Gather modded configuration tasks and schedule them for execution
++        this.configurationTasks.addAll(net.neoforged.fml.ModLoader.postEventWithReturn(new net.neoforged.neoforge.network.event.RegisterConfigurationTasksEvent(this)).getConfigurationTasks());
++    }
++
++    @Override
++    public void handleCustomPayload(net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket packet) {
++        // Neo: Perform modded network initialization when the client sends their channel list.
++        if (packet.payload() instanceof net.neoforged.neoforge.network.payload.ModdedNetworkQueryPayload moddedEnvironmentPayload) {
++            this.connectionType = net.neoforged.neoforge.network.connection.ConnectionType.NEOFORGE;
++            net.neoforged.neoforge.network.registration.NetworkRegistry.initializeNeoForgeConnection(this, moddedEnvironmentPayload.queries());
++            return;
++        }
++
++        super.handleCustomPayload(packet); // Neo: Call super to invoke modded payload handling.
++    }
++
++    @Override
++    public void handlePong(net.minecraft.network.protocol.common.ServerboundPongPacket packet) {
++        super.handlePong(packet);
++        // Neo: During startConfiguration() we send a ping with id 0, if we get a pong back, we initiate the connection.
++        // Crelia: 这是把 startConfiguration 里发出的 ping(0) 接回来的另一半——漏了它,配置阶段永远不会推进(实测卡"正在加入")。
++        if (packet.getId() == 0) {
++            if (!this.connectionType.isNeoForge() && !net.neoforged.neoforge.network.registration.NetworkRegistry.initializeOtherConnection(this)) {
++                return;
++            }
++
++            this.runConfiguration();
++        }
+     }
+ 
+     @Override

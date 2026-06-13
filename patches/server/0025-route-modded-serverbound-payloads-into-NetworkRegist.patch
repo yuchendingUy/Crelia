@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E4=B8=81=E7=A6=B9=E8=BE=B0?=
+ <dingyuchen@dingyuchendeMacBook-Pro.local>
+Date: Sat, 13 Jun 2026 08:45:38 +0800
+Subject: [PATCH] route modded serverbound payloads into NetworkRegistry (fixes
+ registry-sync deadlock for neoforge clients)
+
+
+diff --git a/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+index c3af12d62ba5250ee1fbdc8ac3e6bc581b2f7ab7..da24680d9164bbe8f3d341c241a7509f3bad1cab 100644
+--- a/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
++++ b/src/main/java/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+@@ -169,6 +169,12 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+             this.player.clientBrandName = brandPayload.brand();
+         }
+         // Paper end - Brand support
++        // Neo: Handle modded payloads. Vanilla payloads do not get sent to the modded handling pass. Additional payloads cannot be registered in the minecraft domain.
++        // Crelia: 没有这段,NeoForge 客户端的注册表同步回执会被下面的 DiscardedPayload 早退悄悄吞掉,配置阶段双方互等死锁(实测)
++        if (net.neoforged.neoforge.network.registration.NetworkRegistry.isModdedPayload(packet.payload())) {
++            net.neoforged.neoforge.network.registration.NetworkRegistry.handleModdedPayload(this, packet);
++            return;
++        }
+         if (!(packet.payload() instanceof DiscardedPayload)) {
+             return;
+         }
+diff --git a/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
+index c8a6aadd6e94535bcdbdaf292f8a896d25b4d50e..ca97b9e4c5cec5cac4fdd675ed4723f51cba219e 100644
+--- a/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
++++ b/src/main/java/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
+@@ -94,6 +94,7 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+ 
+     // Neo: Hide vanilla's startConfiguration() in this method so we can call it in handlePong below.
+     private void runConfiguration() {
++        LOGGER.info("Crelia-debug: runConfiguration begin"); // Crelia-debug 临时探针
+         this.send(new ClientboundCustomPayloadPacket(new BrandPayload(this.server.getServerModName())));
+         ServerLinks serverlinks = this.server.serverLinks();
+         // CraftBukkit start
+@@ -153,6 +154,7 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+         // CraftBukkit 的 PlayerLinksSendEvent(同步事件只准在 tick 线程发),必须先调度回正确线程,
+         // 写法照抄本类 handleConfigurationFinished。
+         PacketUtils.ensureRunningOnSameThread(packet, this, (BlockableEventLoop) this.server);
++        LOGGER.info("Crelia-debug: handlePong id={} connectionType={} on tick thread", packet.getId(), this.connectionType); // Crelia-debug 临时探针
+         super.handlePong(packet);
+         // Neo: During startConfiguration() we send a ping with id 0, if we get a pong back, we initiate the connection.
+         // Crelia: 这是把 startConfiguration 里发出的 ping(0) 接回来的另一半——漏了它,配置阶段永远不会推进(实测卡"正在加入")。
+@@ -193,6 +195,7 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+ 
+     @Override
+     public void handleConfigurationFinished(ServerboundFinishConfigurationPacket packet) {
++        LOGGER.info("Crelia-debug: handleConfigurationFinished"); // Crelia-debug 临时探针
+         PacketUtils.ensureRunningOnSameThread(packet, this, (BlockableEventLoop) this.server);
+         this.finishCurrentTask(JoinWorldTask.TYPE);
+         this.connection.setupOutboundProtocol(GameProtocols.CLIENTBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(this.server.registryAccess(), this.connectionType)));
+@@ -297,8 +300,11 @@ public class ServerConfigurationPacketListenerImpl extends ServerCommonPacketLis
+             ConfigurationTask configurationtask = (ConfigurationTask) this.configurationTasks.poll();
+ 
+             if (configurationtask != null) {
++                LOGGER.info("Crelia-debug: starting configuration task {}", configurationtask.type().id()); // Crelia-debug 临时探针
+                 this.currentTask = configurationtask;
+                 configurationtask.start(this::send);
++            } else {
++                LOGGER.info("Crelia-debug: configuration task queue empty"); // Crelia-debug 临时探针
+             }
+ 
+         }

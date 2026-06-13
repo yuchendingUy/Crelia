@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E4=B8=81=E7=A6=B9=E8=BE=B0?=
+ <dingyuchen@dingyuchendeMacBook-Pro.local>
+Date: Sat, 13 Jun 2026 09:21:49 +0800
+Subject: [PATCH] guard orphaned damageContainers.pop until full damage
+ pipeline stitch (03)
+
+
+diff --git a/src/main/java/net/minecraft/world/entity/LivingEntity.java b/src/main/java/net/minecraft/world/entity/LivingEntity.java
+index e2c1a9cd0bbb8853dd1576adb56138d268770143..f2fc9a548276606c00b796245e9d825f96ef6fd2 100644
+--- a/src/main/java/net/minecraft/world/entity/LivingEntity.java
++++ b/src/main/java/net/minecraft/world/entity/LivingEntity.java
+@@ -1637,7 +1637,9 @@ public abstract class LivingEntity extends Entity implements Attackable, net.neo
+                 CriteriaTriggers.PLAYER_HURT_ENTITY.trigger((ServerPlayer) entity1, this, source, f1, amount, flag);
+             }
+ 
+-            this.damageContainers.pop();
++            // Crelia: TODO(03期) NeoForge 伤害管线只缝了尾部 pop,入口 push 和沿途 hook(onEntityIncomingDamage 等)
++            // 尚未缝(官方补丁 LivingEntity.java.patch :165-217)。补齐前先做空栈保护,否则首次实体受伤即 EmptyStackException。
++            if (!this.damageContainers.isEmpty()) this.damageContainers.pop();
+             return flag2;
+         }
+     }

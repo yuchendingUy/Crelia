@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E4=B8=81=E7=A6=B9=E8=BE=B0?=
+ <dingyuchen@dingyuchendeMacBook-Pro.local>
+Date: Sat, 13 Jun 2026 09:16:56 +0800
+Subject: [PATCH] fix double blockstate id registration (vanilla clinit +
+ neoforge bake) and bundle pipeline filter order
+
+
+diff --git a/src/main/java/net/minecraft/network/Connection.java b/src/main/java/net/minecraft/network/Connection.java
+index 92759adc732b890702f9c1cd5dc70c482478cd6f..1d9b150ef4874eb545263973d249c02d3ffb3a23 100644
+--- a/src/main/java/net/minecraft/network/Connection.java
++++ b/src/main/java/net/minecraft/network/Connection.java
+@@ -201,11 +201,13 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+         if (this.delayedDisconnect != null) {
+             this.disconnect(this.delayedDisconnect);
+         }
++        net.neoforged.neoforge.network.connection.ConnectionUtils.setConnection(channelhandlercontext, this); // NeoForge - register connection on channel for payload context lookup
+         this.becomeActive = true; // Folia - region threading
+     }
+ 
+     public void channelInactive(ChannelHandlerContext channelhandlercontext) {
+         this.disconnect((Component) Component.translatable("disconnect.endOfStream"));
++        net.neoforged.neoforge.network.connection.ConnectionUtils.removeConnection(channelhandlercontext); // NeoForge
+     }
+ 
+     public void exceptionCaught(ChannelHandlerContext channelhandlercontext, Throwable throwable) {
+@@ -425,6 +427,11 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+ 
+                 unconfiguredpipelinehandler_d = unconfiguredpipelinehandler_d.andThen((channelhandlercontext) -> {
+                     channelhandlercontext.pipeline().addAfter("encoder", "unbundler", packetbundleunpacker);
++                    // Neo: our handlers must be between the encoder and the unbundler, so re-inject them
++                    // Note, this call must be inside the .andThen lambda, or it will actually run before the unbundler gets added.
++                    // Crelia: 漏这刀的实锤后果——GenericPacketSplitter 留在拆捆器外侧,拿到原始 bundle 包
++                    // 直接 "Sending unknown packet 'clientbound/minecraft:bundle'" 踢人(NeoForge 客户端进世界 0.3 秒被踢)
++                    net.neoforged.neoforge.network.filters.NetworkFilters.injectIfNecessary(this);
+                 });
+             }
+ 
+diff --git a/src/main/java/net/minecraft/network/PacketBundleUnpacker.java b/src/main/java/net/minecraft/network/PacketBundleUnpacker.java
+index 5414d003360f75414852b491d6c87a202f8417c8..f6cf5d01c38b9111e2546eacb7ac14ab2fe2131c 100644
+--- a/src/main/java/net/minecraft/network/PacketBundleUnpacker.java
++++ b/src/main/java/net/minecraft/network/PacketBundleUnpacker.java
+@@ -14,7 +14,7 @@ public class PacketBundleUnpacker extends MessageToMessageEncoder<Packet<?>> {
+     }
+ 
+     protected void encode(ChannelHandlerContext channelHandlerContext, Packet<?> packet, List<Object> list) throws Exception {
+-        this.bundlerInfo.unbundlePacket(packet, list::add);
++        this.bundlerInfo.unbundlePacket(packet, list::add, channelHandlerContext); // NeoForge - context-aware unbundling (per-connection packet filtering)
+         if (packet.isTerminal()) {
+             channelHandlerContext.pipeline().remove(channelHandlerContext.name());
+         }
+diff --git a/src/main/java/net/minecraft/network/protocol/BundlePacket.java b/src/main/java/net/minecraft/network/protocol/BundlePacket.java
+index 288d17dd076ce47776a7178708e75beee8786c8f..7752d695d64750b00ab3d76d58220477f1f47705 100644
+--- a/src/main/java/net/minecraft/network/protocol/BundlePacket.java
++++ b/src/main/java/net/minecraft/network/protocol/BundlePacket.java
+@@ -6,7 +6,7 @@ public abstract class BundlePacket<T extends PacketListener> implements Packet<T
+     private final Iterable<Packet<? super T>> packets;
+ 
+     protected BundlePacket(Iterable<Packet<? super T>> packets) {
+-        this.packets = packets;
++        this.packets = net.neoforged.neoforge.network.bundle.BundlePacketUtils.flatten(packets); // NeoForge - flatten nested bundles
+     }
+ 
+     public final Iterable<Packet<? super T>> subPackets() {
+diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
+index 52bf8ead5e373d831558b3f9e46481a2195b04ab..da5314cc917374c720ad4c0792faab231e274368 100644
+--- a/src/main/java/net/minecraft/server/MinecraftServer.java
++++ b/src/main/java/net/minecraft/server/MinecraftServer.java
+@@ -327,10 +327,18 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+ 
+     @Override
+     public void execute(Runnable runnable) {
+-        if (true) {
+-            throw new UnsupportedOperationException();
++        // Crelia start - NeoForge mods use the server as an executor expecting "run on the server thread".
++        // Under Folia there is no single server thread. If the caller is already on a tick thread (region
++        // or global), it holds the correct region context, so run inline to keep region-owned state on its
++        // owning thread. Otherwise (async callback threads, e.g. netty payload handlers) route to the global
++        // tick. Replaces Folia's hard UnsupportedOperationException, which silently broke every mod that
++        // schedules work this way. (26.1.2 同款适配器,原样移植)
++        if (ca.spottedleaf.moonrise.common.util.TickThread.isTickThread()) {
++            runnable.run();
++            return;
+         }
+-        super.execute(runnable);
++        io.papermc.paper.threadedregions.RegionizedServer.getInstance().addTask(runnable);
++        // Crelia end
+     }
+ 
+     @Override
+diff --git a/src/main/java/net/minecraft/world/level/block/Blocks.java b/src/main/java/net/minecraft/world/level/block/Blocks.java
+index 5d6d8f80796f1621dcb5eb00f08a14c2e171204a..71a37922bfc3890563f68ddd38c670efff191e88 100644
+--- a/src/main/java/net/minecraft/world/level/block/Blocks.java
++++ b/src/main/java/net/minecraft/world/level/block/Blocks.java
+@@ -7803,7 +7803,10 @@ public class Blocks {
+     static {
+         for (Block block : BuiltInRegistries.BLOCK) {
+             for (BlockState blockState : block.getStateDefinition().getPossibleStates()) {
+-                Block.BLOCK_STATE_REGISTRY.add(blockState);
++                // Neo: comment out, it's done in NeoForgeRegistryCallbacks
++                // Crelia: 漏缝此刀的实锤后果——vanilla 先填一遍状态表,NeoForge bake 再追加一遍,每个状态拿到
++                // 第二个 ID(26763 起),服务端区块用新 ID 编码,客户端查不到直接崩(No value with id 26763)
++                //Block.BLOCK_STATE_REGISTRY.add(blockState);
+                 blockState.initCache();
+             }
+ 

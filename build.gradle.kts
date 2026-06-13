@@ -47,6 +47,7 @@ subprojects {
     repositories {
         mavenCentral()
         maven(paperMavenPublicUrl)
+        maven("https://maven.neoforged.net/releases") // Crelia: FancyModLoader 加载器
     }
 }
 
