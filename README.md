@@ -35,26 +35,6 @@ Crelia = **Folia(性能)+ NeoForge(模组)**。
 - 🚧 `mods/` 目前为空,**机械动力实测尚未完成**(重型模组会暴露更多待缝合的钩子)
 - 🚧 实体伤害管线仅做了临时保护,完整缝合待续
 
----
-
-## 快速开始(直接开服)
-
-需要一台装了 **Java 21** 的电脑,然后:
-
-```bash
-# 1. 自己构建发布包(见下方"从源码构建"),或拿到 Crelia-1.21.1.jar
-# 2. 把 jar 单独放一个文件夹,首次运行会生成 eula.txt
-java -jar Crelia-1.21.1.jar
-
-# 3. 编辑 eula.txt,把 eula=false 改成 eula=true(同意 Minecraft EULA)
-# 4. 再次运行即可开服;world / config / mods 文件夹都生成在 jar 旁边
-java -jar Crelia-1.21.1.jar
-```
-
-调整内存:设环境变量 `CRELIA_JVM_ARGS`,例如 `CRELIA_JVM_ARGS="-Xms4G -Xmx8G"`。
-装模组:把 NeoForge 1.21.1 的模组 jar 放进 jar 旁边的 `mods/` 文件夹。
-
----
 
 ## 从源码构建 / 参与开发
 
