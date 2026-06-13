@@ -1,231 +1,121 @@
 <div align=center>
     <img src="./folia.png">
     <br /><br />
-    <p>Fork of <a href="https://github.com/PaperMC/Paper">Paper</a> which adds regionised multithreading to the dedicated server.</p>
+    <p><b>Crelia</b> —— 在 <a href="https://github.com/PaperMC/Folia">Folia</a>(区域多线程的 Paper 分支)之上缝合 <a href="https://github.com/neoforged/NeoForge">NeoForge</a> 模组加载能力的 Minecraft 服务端核心。</p>
+    <p><b>这是 1.21.1 分支</b> —— 为运行<b>机械动力(Create)</b>等 NeoForge 模组而生,目标是用 Folia 的多线程换取性能。</p>
 </div>
 
-## Overview
+---
 
-Folia groups nearby loaded chunks to form an "independent region."
-See [the PaperMC documentation](https://docs.papermc.io/folia/reference/region-logic) for exact details on how Folia
-will group nearby chunks.
-Each independent region has its own tick loop, which is ticked at the
-regular Minecraft tickrate (20TPS). The tick loops are executed
-on a thread pool in parallel. There is no main thread anymore, 
-as each region effectively has its own "main thread" that executes
-the entire tick loop.
+## 这是什么
 
-For a server with many spread out players, Folia will create many
-spread out regions and tick them all in parallel on a configurable sized
-threadpool. Thus, Folia should scale well for servers like this.
+Crelia = **Folia(性能)+ NeoForge(模组)**。
 
-Folia is also its own project, this will not be merged into Paper
-for the foreseeable future. 
+- **Folia** 把相邻区块编组成相互独立的"区域",每个区域有自己的 tick 线程,在线程池里并行执行——没有传统意义上的"主线程"。对于机械动力这种把大量机器分散在世界各处的玩法,这意味着成倍的性能提升。
+- **NeoForge** 提供模组加载(FancyModLoader)、事件总线、注册表、capability 等一整套模组基础设施。
 
-A more detailed but abstract overview: [Project overview](https://docs.papermc.io/folia/reference/overview).
+把两者缝在一起,就能让机械动力这类重型模组运行在 Folia 的多线程引擎上。
 
-## FAQ
+> **设计原则:这是"缝合"不是"创新"。** 直接复用 Folia / NeoForge 的现成代码;凡是性能机制与模组兼容冲突的地方,**一律保留 Folia,性能优先**。
 
-### What server types can benefit from Folia?
-Server types that naturally spread players out, 
-like skyblock or SMP, will benefit the most from Folia. The server
-should have a sizeable player count, too.
+### 版本
 
-### What hardware will Folia run best on?
-Ideally, at least 16 _cores_ (not threads).
+| | |
+|---|---|
+| Minecraft | 1.21.1 |
+| 基底 | Folia(Paper 分支) |
+| 模组加载器 | NeoForge 1.21.1 / FancyModLoader 4.0.42 |
+| 构建 JDK | **Java 21**(必须) |
 
-### How to best configure Folia?
-First, it is recommended that the world is pre-generated so that the number
-of chunk system worker threads required is reduced greatly.
+### 当前进度
 
-The following is a _very rough_ estimation based off of the testing
-done before Folia was released on the test server we ran that
-had ~330 players peak. So, it is not exact and will require further tuning - 
-just take it as a starting point.
+- ✅ 能开服,Folia 区域多线程正常运行
+- ✅ 原版玩法可玩,**NeoForge 客户端能进服**
+- ✅ 可打成单文件自解压服务端 jar
+- 🚧 `mods/` 目前为空,**机械动力实测尚未完成**(重型模组会暴露更多待缝合的钩子)
+- 🚧 实体伤害管线仅做了临时保护,完整缝合待续
 
-The total number of cores on the machine available should be 
-taken into account. Then, allocate threads for: 
-- netty IO :~4 per 200-300 players
-- chunk system io threads: ~3 per 200-300 players
-- chunk system workers if pre-generated, ~2 per 200-300 players
-- There is no best guess for chunk system workers if not pre-generated, as
-  on the test server we ran we gave 16 threads but chunk generation was still
-  slow at ~300 players.
-- GC Settings: ???? But, GC settings _do_ allocate concurrent threads, and you need
-  to know exactly how many. This is typically through the `-XX:ConcGCThreads=n` flag. Do not
-  confuse this flag with `-XX:ParallelGCThreads=n`, as parallel GC threads only run when
-  the application is paused by GC and as such should not be taken into account.
+---
 
-After all of that allocation, the remaining cores on the system until 80%
-allocation (total threads allocated < 80% of cpus available) can be
-allocated to tickthreads (under global config, threaded-regions.threads). 
+## 快速开始(直接开服)
 
-The reason you should not allocate more than 80% of the cores is due to the
-fact that plugins or even the server may make use of additional threads 
-that you cannot configure or even predict.
+需要一台装了 **Java 21** 的电脑,然后:
 
-Additionally, the above is all a rough guess based on player count, but
-it is very likely that the thread allocation will not be ideal, and you 
-will need to tune it based on usage of the threads that you end up seeing.
+```bash
+# 1. 自己构建发布包(见下方"从源码构建"),或拿到 Crelia-1.21.1.jar
+# 2. 把 jar 单独放一个文件夹,首次运行会生成 eula.txt
+java -jar Crelia-1.21.1.jar
 
-## Plugin compatibility
-
-There is no more main thread. I expect _every_ single plugin
-that exists to require _some_ level of modification to function
-in Folia. Additionally, multithreading of _any kind_ introduces
-possible race conditions in plugin held data - so, there are bound
-to be changes that need to be made.
-
-So, have your expectations for compatibility at 0.
-
-## API plans
-
-Currently, there is a lot of API that relies on the main thread. 
-I expect basically zero plugins that are compatible with Paper to 
-be compatible with Folia. However, there are plans to add API that 
-would allow Folia plugins to be compatible with Paper.
-
-For example, the Bukkit Scheduler. The Bukkit Scheduler inherently
-relies on a single main thread. Folia's RegionScheduler and Folia's
-EntityScheduler allow scheduling of tasks to the "next tick" of whatever
-region "owns" either a location or an entity. These could be implemented
-on regular Paper, except they schedule to the main thread - in both cases,
-the execution of the task will occur on the thread that "owns" the
-location or entity. This concept applies in general, as the current Paper
-(single threaded) can be viewed as one giant "region" that encompasses
-all chunks in all worlds. 
-
-It is not yet decided whether to add this API to Paper itself directly
-or to Paperlib.
-
-### The new rules
-
-First, Folia breaks many plugins. To aid users in figuring out which
-plugins work, only plugins that have been explicitly marked by the
-author(s) to work with Folia will be loaded. By placing
-"folia-supported: true" into the plugin's plugin.yml, plugin authors
-can mark their plugin as compatible with regionised multithreading.
-
-The other important rule is that the regions tick in _parallel_, and not 
-_concurrently_. They do not share data, they do not expect to share data,
-and sharing of data _will_ cause data corruption. 
-Code that is running in one region under no circumstance can 
-be accessing or modifying data that is in another region. Just 
-because multithreading is in the name, it doesn't mean that everything 
-is now thread-safe. In fact, there are only a _few_ things that were 
-made thread-safe to make this happen. As time goes on, the number 
-of thread context checks will only grow, even _if_ it comes at a 
-performance penalty - _nobody_ is going to use or develop for a 
-server platform that is buggy as hell, and the only way to 
-prevent and find these bugs is to make bad accesses fail _hard_ at the 
-source of the bad access.
-
-This means that Folia compatible plugins need to take advantage of 
-API like the RegionScheduler and the EntityScheduler to ensure 
-their code is running on the correct thread context.
-
-In general, it is safe to assume that a region owns chunk data
-in an approximate 8 chunks from the source of an event (i.e. player
-breaks block, can probably access 8 chunks around that block). But,
-this is not guaranteed - plugins should take advantage of upcoming
-thread-check API to ensure correct behavior.
-
-The only guarantee of thread-safety comes from the fact that a
-single region owns data in certain chunks - and if that region is
-ticking, then it has full access to that data. This data is 
-specifically entity/chunk/poi data, and is entirely unrelated
-to **ANY** plugin data.
-
-Normal multithreading rules apply to data that plugins store/access
-their own data or another plugin's - events/commands/etc. are called 
-in _parallel_ because regions are ticking in _parallel_ (we CANNOT 
-call them in a synchronous fashion, as this opens up deadlock issues 
-and would handicap performance). There are no easy ways out of this, 
-it depends solely on what data is being accessed. Sometimes a 
-concurrent collection (like ConcurrentHashMap) is enough, and often a 
-concurrent collection used carelessly will only _hide_ threading 
-issues, which then become near impossible to debug.
-
-### Current API additions
-
-To properly understand API additions, please read
-[Project overview](https://docs.papermc.io/folia/reference/overview).
-
-- RegionScheduler, AsyncScheduler, GlobalRegionScheduler, and EntityScheduler 
-  acting as a replacement for  the BukkitScheduler.
-  The entity scheduler is retrieved via Entity#getScheduler, and the
-  rest of the schedulers can be retrieved from the Bukkit/Server classes.
-- Bukkit#isOwnedByCurrentRegion to test if the current ticking region
-  owns positions/entities
-
-### Thread contexts for API
-
-To properly understand API additions, please read
-[Project overview](https://docs.papermc.io/folia/reference/overview).
-
-General rules of thumb:
-
-1. Commands for entities/players are called on the region which owns
-the entity/player. Console commands are executed on the global region.
-
-2. Events involving a single entity (i.e player breaks/places block) are
-called on the region owning entity. Events involving actions on an entity
-(such as entity damage) are invoked on the region owning the target entity.
-
-3. The async modifier for events is deprecated - all events
-fired from regions or the global region are considered _synchronous_, 
-even though there is no main thread anymore. 
-
-### Current broken API
-
-- Most API that interacts with portals / respawning players / some
-  player login API is broken.
-- ALL scoreboard API is considered broken (this is global state that
-  I've not figured out how to properly implement yet)
-- World loading/unloading
-- Entity#teleport. This will NEVER UNDER ANY CIRCUMSTANCE come back, 
-  use teleportAsync
-- Could be more
-
-### Planned API additions
-
-- Proper asynchronous events. This would allow the result of an event
-  to be completed later, on a different thread context. This is required
-  to implement some things like spawn position select, as asynchronous
-  chunk loads are required when accessing chunk data out-of-region.
-- World loading/unloading
-- More to come here
-
-### Planned API changes
-
-- Super aggressive thread checks across the board. This is absolutely
-  required to prevent plugin devs from shipping code that may randomly
-  break random parts of the server in entirely _undiagnosable_ manners.
-- More to come here
-
-### Maven information
-* Maven Repo (for folia-api):
-```xml
-<repository>
-    <id>papermc</id>
-    <url>https://repo.papermc.io/repository/maven-public/</url>
-</repository>
+# 3. 编辑 eula.txt,把 eula=false 改成 eula=true(同意 Minecraft EULA)
+# 4. 再次运行即可开服;world / config / mods 文件夹都生成在 jar 旁边
+java -jar Crelia-1.21.1.jar
 ```
-* Artifact Information:
-```xml
-<dependency>
-    <groupId>dev.folia</groupId>
-    <artifactId>folia-api</artifactId>
-    <version>1.20.1-R0.1-SNAPSHOT</version>
-    <scope>provided</scope>
-</dependency>
- ```
 
+调整内存:设环境变量 `CRELIA_JVM_ARGS`,例如 `CRELIA_JVM_ARGS="-Xms4G -Xmx8G"`。
+装模组:把 NeoForge 1.21.1 的模组 jar 放进 jar 旁边的 `mods/` 文件夹。
 
-## License
-The PATCHES-LICENSE file describes the license for api & server patches,
-found in `./patches` and its subdirectories except when noted otherwise.
+---
 
-The fork is based off of PaperMC's fork example found [here](https://github.com/PaperMC/paperweight-examples).
-As such, it contains modifications to it in this project, please see the repository for license information
-of modified files.
+## 从源码构建 / 参与开发
+
+> ⚠️ **核心概念:本仓库里是"补丁"不是源码。** 真正的 `net/minecraft` 源码受 Mojang 版权保护、不能上传;仓库里存的是补丁(diff),克隆后在你本地用你自己下载的 Minecraft **现场生成**完整源码。这也是 Paper / Folia 官方的做法。
+
+开发是一个环:`补丁 → 生成源码 → 改源码 → 提交改动 → 重新生成补丁 → 提交补丁`。
+
+### 1. 准备环境
+- **Java 21**(推荐 Eclipse Temurin 21;工具链锁死 21,用更高版本会失败)
+- Git
+
+### 2. 克隆并生成源码
+```bash
+git clone -b 1.21.1 https://github.com/yuchendingUy/Crelia.git
+cd Crelia
+./gradlew applyPatches      # = patch.sh / patch.bat
+```
+`applyPatches` 会下载原版 1.21.1 服务端、反编译、依次打上 Paper + Folia + Crelia 的全部补丁,生成 `Folia-Server/` 与 `Folia-API/` 的真实源码。
+
+> **首次运行较慢(下载+反编译,十几到几十分钟)且需要联网。** 已知两个网络坑:
+> - 需从 `hub.spigotmc.org` 拉子模块,该服务器常中途断流——失败就重跑几次。
+> - 偶发下载到损坏 jar(报 `zip END header not found`),删掉该文件重跑即可。
+
+### 3. 改代码
+用 IDE 打开项目,编辑 `Folia-Server/src/` 下的源码(这才是可编辑的真实源码)。
+
+### 4. 运行与打包
+```bash
+./gradlew :folia-server:runServerFml          # 开发模式开服(带 FML + NeoForge)
+./gradlew :folia-server:creliaStandaloneJar   # 打成单文件发布 jar(输出在仓库上级目录)
+```
+
+### 5. 把改动固化成补丁(关键!否则改动不会进 git)
+```bash
+cd Folia-Server
+git add -A && git commit -m "你的改动说明"     # 先在生成的源码仓库里提交
+cd ..
+./gradlew rebuildPatches                       # = rb.sh / rb.bat,把提交翻译成 patches/server/*.patch
+git add patches/ && git commit -m "..." && git push origin 1.21.1
+```
+**只有 `patches/` 里的补丁文件会进 GitHub**,`Folia-Server/src` 是生成物不上传。多人协作合并的是补丁文件。
+
+---
+
+## 仓库结构
+
+| 目录 | 内容 | 是否上传 |
+|---|---|---|
+| `patches/` | Folia 补丁 + Crelia 的 NeoForge 缝合补丁(server 0020–0028) | ✅ 源料 |
+| `neoforge/` | NeoForge 1.21.1 框架代码(client 包已去,server stub 已补) | ✅ 源料 |
+| `build-data/crelia-launcher/` | 自解压单文件启动器源码 | ✅ 源料 |
+| `build.gradle.kts` / `settings.gradle.kts` 等 | 构建配置与缝合接线 | ✅ 源料 |
+| `Folia-Server/` `Folia-API/` | `applyPatches` 生成的真实源码(含反编译 MC) | ❌ 生成物,gitignore |
+| `.gradle/` `build/` `run/` | 缓存 / 编译输出 / 测试世界 | ❌ 生成物,gitignore |
+
+---
+
+## 致谢与许可
+
+Crelia 站在这些项目的肩膀上,所有底层功劳归于它们:
+- [Paper](https://github.com/PaperMC/Paper) 与 [Folia](https://github.com/PaperMC/Folia) —— 服务端基底与区域多线程引擎(见 `LICENSE.txt`、`PATCHES-LICENSE`)
+- [NeoForge](https://github.com/neoforged/NeoForge) 与 FancyModLoader —— 模组加载基础设施(LGPL-2.1)
+
+本仓库**不包含、也不分发** Minecraft 的任何代码或资源——它们由 `applyPatches` 在你本地用你自己合法获得的 Minecraft 生成。使用本项目即表示你同意 [Minecraft EULA](https://aka.ms/MinecraftEULA)。
